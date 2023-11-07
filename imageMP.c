@@ -1,9 +1,9 @@
-#include <stdint.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <time.h>
 #include <string.h>
-#include "image.h"
-#include <pthread.h> //CHANGED: included pThread library
+#include "imageMP.h"
+#include <mpi.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -11,19 +11,9 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-typedef struct {
-	Image* srcImage;
-	Image* destImage;
-	int start;
-	int stop;
-	Matrix algorithm;
-} Data; //CHANGED: need a struct to pass in convulute data
-
-pthread_mutex_t mutex;
-
-//An array of kernel matrices to be used for image convolution.
+//An array of kernel matrices to be used for image convolution.  
 //The indexes of these match the enumeration from the header file. ie. algorithms[BLUR] returns the kernel corresponding to a box blur.
-Matrix algorithms[] = {
+Matrix algorithms[]={
     {{0,-1,0},{-1,4,-1},{0,-1,0}},
     {{0,-1,0},{-1,5,-1},{0,-1,0}},
     {{1/9.0,1/9.0,1/9.0},{1/9.0,1/9.0,1/9.0},{1/9.0,1/9.0,1/9.0}},
@@ -32,22 +22,6 @@ Matrix algorithms[] = {
     {{0,0,0},{0,1,0},{0,0,0}}
 };
 
-
-//CHANGED: added a thread procedure for pthread functionality
-void* threadProc(void* dat) {
-	Data* data2 = (Data*)dat;
-	for (int row = data2->start; row < data2->stop; row++) {
-		for (int pix = 0; pix < data2->srcImage->width; pix++) {
-			for (int bit = 0; bit < data2->srcImage->bpp; bit++) {
-				 uint8_t NewValue = getPixelValue(data2->srcImage,pix,row,bit,data2->algorithm);
-				pthread_mutex_lock(&mutex); 
-				data2->destImage->data[Index(pix,row,data2->srcImage->width,bit,data2->srcImage->bpp)] = NewValue;
-				pthread_mutex_unlock(&mutex);
-			}
-		}
-	}
-	pthread_exit(NULL);
-}
 
 //getPixelValue - Computes the value of a specific pixel on a specific channel using the selected convolution kernel
 //Paramters: srcImage:  An Image struct populated with the image being convoluted
@@ -75,7 +49,7 @@ uint8_t getPixelValue(Image* srcImage,int x,int y,int bit,Matrix algorithm){
         algorithm[2][0]*srcImage->data[Index(mx,py,srcImage->width,bit,srcImage->bpp)]+
         algorithm[2][1]*srcImage->data[Index(x,py,srcImage->width,bit,srcImage->bpp)]+
         algorithm[2][2]*srcImage->data[Index(px,py,srcImage->width,bit,srcImage->bpp)];
-     return result;
+    return result;
 }
 
 //convolute:  Applies a kernel matrix to an image
@@ -83,10 +57,12 @@ uint8_t getPixelValue(Image* srcImage,int x,int y,int bit,Matrix algorithm){
 //            destImage: A pointer to a  pre-allocated (including space for the pixel array) structure to receive the convoluted image.  It should be the same size as srcImage
 //            algorithm: The kernel matrix to use for the convolution
 //Returns: Nothing
-void convolute(Image* srcImage,Image* destImage,Matrix algorithm){
+void convolute(Image* srcImage,Image* destImage,Matrix algorithm, int num, int rank){
     int row,pix,bit,span;
     span=srcImage->bpp*srcImage->bpp;
-    for (row=0;row<srcImage->height;row++){
+    int start = rank * num;
+    int stop = (rank + 1) * num;
+    for (row=start;row<stop;row++){
         for (pix=0;pix<srcImage->width;pix++){
             for (bit=0;bit<srcImage->bpp;bit++){
                 destImage->data[Index(pix,row,srcImage->width,bit,srcImage->bpp)]=getPixelValue(srcImage,pix,row,bit,algorithm);
@@ -118,18 +94,26 @@ enum KernelTypes GetKernelType(char* type){
 //argv is expected to take 2 arguments.  First is the source file name (can be jpg, png, bmp, tga).  Second is the lower case name of the algorithm.
 int main(int argc,char** argv){
     long t1,t2;
-    t1=time(NULL);
-    int thread_count;
-    pthread_mutex_init(&mutex, NULL);
+
+    int comm_sz; //number of processes
+    int my_rank;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &comm_sz);
+
+    if (my_rank == 0) {
+	t1 = MPI_Wtime();
+    }
 
     stbi_set_flip_vertically_on_load(0); 
     if (argc!=3) return Usage();
-    char* fileName = argv[1];
-    if (!strcmp(argv[1],"pic4.jpg")&&!strcmp(argv[2],"gauss")) {
+    char* fileName=argv[1];
+    if (!strcmp(argv[1],"pic4.jpg")&&!strcmp(argv[2],"gauss")){
         printf("You have applied a gaussian filter to Gauss which has caused a tear in the time-space continum.\n");
     }
-    enum KernelTypes type = GetKernelType(argv[2]);
-    Image srcImage, destImage, bwImage;   
+    enum KernelTypes type=GetKernelType(argv[2]);
+
+    Image srcImage,destImage,bwImage;   
     srcImage.data=stbi_load(fileName,&srcImage.width,&srcImage.height,&srcImage.bpp,0);
     if (!srcImage.data){
         printf("Error loading file %s.\n",fileName);
@@ -139,32 +123,22 @@ int main(int argc,char** argv){
     destImage.height=srcImage.height;
     destImage.width=srcImage.width;
     destImage.data=malloc(sizeof(uint8_t)*destImage.width*destImage.bpp*destImage.height);
-    thread_count = 15;
-    pthread_t thread_handles[thread_count];
-    Data data[thread_count];
-    int rows_num = srcImage.height / thread_count;
     
-    for (int thread = 0; thread < thread_count; thread++) {
-	data[thread].srcImage = &srcImage;
-	data[thread].destImage = &destImage;
-	memcpy(data[thread].algorithm, algorithms[type], sizeof(Matrix));
-	data[thread].start = thread * rows_num;
-	data[thread].stop = (thread + 1) * rows_num;
-    }
-    for (int thread = 0; thread < thread_count; thread++) {
-    	pthread_create(&thread_handles[thread], NULL, threadProc, &data[thread]);
-    }
-    for (int thread=0; thread < thread_count; thread++) {
-    	pthread_join(thread_handles[thread], NULL);
+    comm_sz = 10;
+    int rows_num = srcImage.height / comm_sz;
+    if (my_rank == comm_sz - 1) {
+	rows_num += srcImage.height % comm_sz;
     }
 
-    //convolute(&srcImage,&destImage,algorithms[type]);
+    convolute(&srcImage,&destImage,algorithms[type], rows_num, my_rank);
     stbi_write_png("output.png",destImage.width,destImage.height,destImage.bpp,destImage.data,destImage.bpp*destImage.width);
     stbi_image_free(srcImage.data);
     
     free(destImage.data);
-    pthread_mutex_destroy(&mutex);
-    t2=time(NULL);
+    if (my_rank == 0) {
+	t2 = MPI_Wtime();
+    }
+    MPI_Finalize();
     printf("Took %ld seconds\n",t2-t1);
    return 0;
 }
