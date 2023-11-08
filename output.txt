@@ -1,0 +1,9 @@
+Script started on Tue Nov  7 22:15:54 2023
+^[]0;westa@r1n00.darwin:~/picProject/CISC372_picProject^G^[[?1034h[westa@r1n00 CISC372_picProject]$ srun ./imageMP pic1.jpg edge^M
+Took 6 seconds^M
+^[]0;westa@r1n00.darwin:~/picProject/CISC372_picProject^G[westa@r1n00 CISC372_picProject]$ ./imageP pic1.jpg edge^M
+Took 11 seconds^M
+^[]0;westa@r1n00.darwin:~/picProject/CISC372_picProject^G[westa@r1n00 CISC372_picProject]$ exit^M
+exit^M
+
+Script done on Tue Nov  7 22:16:48 2023
