@@ -3,7 +3,7 @@
 #include <time.h>
 #include <string.h>
 #include "imageMP.h"
-#include <mpi.h>
+#include <omp.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -11,7 +11,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-//An array of kernel matrices to be used for image convolution.  
+//An array of kernel matrices to be used for image convolution.
 //The indexes of these match the enumeration from the header file. ie. algorithms[BLUR] returns the kernel corresponding to a box blur.
 Matrix algorithms[]={
     {{0,-1,0},{-1,4,-1},{0,-1,0}},
@@ -57,12 +57,16 @@ uint8_t getPixelValue(Image* srcImage,int x,int y,int bit,Matrix algorithm){
 //            destImage: A pointer to a  pre-allocated (including space for the pixel array) structure to receive the convoluted image.  It should be the same size as srcImage
 //            algorithm: The kernel matrix to use for the convolution
 //Returns: Nothing
-void convolute(Image* srcImage,Image* destImage,Matrix algorithm, int num, int rank){
-    int row,pix,bit,span;
+void convolute(Image* srcImage,Image* destImage,Matrix algorithm){
+    int row,span;
     span=srcImage->bpp*srcImage->bpp;
-    int start = rank * num;
-    int stop = (rank + 1) * num;
+    int my_rank = omp_get_thread_num();
+    int thread_count = omp_get_num_threads();
+    int start, stop;
+    start = my_rank * srcImage->height;
+    stop = (my_rank + 1) * srcImage->height;
     for (row=start;row<stop;row++){
+        int pix,bit;
         for (pix=0;pix<srcImage->width;pix++){
             for (bit=0;bit<srcImage->bpp;bit++){
                 destImage->data[Index(pix,row,srcImage->width,bit,srcImage->bpp)]=getPixelValue(srcImage,pix,row,bit,algorithm);
@@ -95,17 +99,10 @@ enum KernelTypes GetKernelType(char* type){
 int main(int argc,char** argv){
     long t1,t2;
 
-    int comm_sz; //number of processes
-    int my_rank;
-    MPI_Init(&argc, &argv);
-    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &comm_sz);
+    int thread_count;
+    thread_count = strtol(argv[1], NULL, 10);
 
-    if (my_rank == 0) {
-	t1 = MPI_Wtime();
-    }
-
-    stbi_set_flip_vertically_on_load(0); 
+    stbi_set_flip_vertically_on_load(0);
     if (argc!=3) return Usage();
     char* fileName=argv[1];
     if (!strcmp(argv[1],"pic4.jpg")&&!strcmp(argv[2],"gauss")){
@@ -113,7 +110,7 @@ int main(int argc,char** argv){
     }
     enum KernelTypes type=GetKernelType(argv[2]);
 
-    Image srcImage,destImage,bwImage;   
+    Image srcImage,destImage,bwImage;
     srcImage.data=stbi_load(fileName,&srcImage.width,&srcImage.height,&srcImage.bpp,0);
     if (!srcImage.data){
         printf("Error loading file %s.\n",fileName);
@@ -123,22 +120,14 @@ int main(int argc,char** argv){
     destImage.height=srcImage.height;
     destImage.width=srcImage.width;
     destImage.data=malloc(sizeof(uint8_t)*destImage.width*destImage.bpp*destImage.height);
-    
-    comm_sz = 10;
-    int rows_num = srcImage.height / comm_sz;
-    if (my_rank == comm_sz - 1) {
-	rows_num += srcImage.height % comm_sz;
-    }
 
-    convolute(&srcImage,&destImage,algorithms[type], rows_num, my_rank);
+    # pragma omp parallel num_threads(thread_count)
+    convolute(&srcImage,&destImage,algorithms[type]);
     stbi_write_png("output.png",destImage.width,destImage.height,destImage.bpp,destImage.data,destImage.bpp*destImage.width);
     stbi_image_free(srcImage.data);
-    
+
     free(destImage.data);
-    if (my_rank == 0) {
-	t2 = MPI_Wtime();
-    }
-    MPI_Finalize();
+
     printf("Took %ld seconds\n",t2-t1);
    return 0;
 }
