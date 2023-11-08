@@ -12,11 +12,11 @@
 #include "stb_image_write.h"
 
 typedef struct {
-	Image* srcImage;
-	Image* destImage;
-	int start;
-	int stop;
-	Matrix algorithm;
+        Image* srcImage;
+        Image* destImage;
+        int start;
+        int stop;
+        Matrix algorithm;
 } Data; //CHANGED: need a struct to pass in convulute data
 
 pthread_mutex_t mutex;
@@ -35,18 +35,18 @@ Matrix algorithms[] = {
 
 //CHANGED: added a thread procedure for pthread functionality
 void* threadProc(void* dat) {
-	Data* data2 = (Data*)dat;
-	for (int row = data2->start; row < data2->stop; row++) {
-		for (int pix = 0; pix < data2->srcImage->width; pix++) {
-			for (int bit = 0; bit < data2->srcImage->bpp; bit++) {
-				 uint8_t NewValue = getPixelValue(data2->srcImage,pix,row,bit,data2->algorithm);
-				pthread_mutex_lock(&mutex); 
-				data2->destImage->data[Index(pix,row,data2->srcImage->width,bit,data2->srcImage->bpp)] = NewValue;
-				pthread_mutex_unlock(&mutex);
-			}
-		}
-	}
-	pthread_exit(NULL);
+        Data* data2 = (Data*)dat;
+        for (int row = data2->start; row < data2->stop; row++) {
+                for (int pix = 0; pix < data2->srcImage->width; pix++) {
+                        for (int bit = 0; bit < data2->srcImage->bpp; bit++) {
+                                 uint8_t NewValue = getPixelValue(data2->srcImage,pix,row,bit,data2->algorithm);
+                                pthread_mutex_lock(&mutex);
+                                data2->destImage->data[Index(pix,row,data2->srcImage->width,bit,data2->srcImage->bpp)] = NewValue;
+                                pthread_mutex_unlock(&mutex);
+                        }
+                }
+        }
+        pthread_exit(NULL);
 }
 
 //getPixelValue - Computes the value of a specific pixel on a specific channel using the selected convolution kernel
@@ -122,14 +122,14 @@ int main(int argc,char** argv){
     int thread_count;
     pthread_mutex_init(&mutex, NULL);
 
-    stbi_set_flip_vertically_on_load(0); 
+    stbi_set_flip_vertically_on_load(0);
     if (argc!=3) return Usage();
     char* fileName = argv[1];
     if (!strcmp(argv[1],"pic4.jpg")&&!strcmp(argv[2],"gauss")) {
         printf("You have applied a gaussian filter to Gauss which has caused a tear in the time-space continum.\n");
     }
     enum KernelTypes type = GetKernelType(argv[2]);
-    Image srcImage, destImage, bwImage;   
+    Image srcImage, destImage, bwImage;
     srcImage.data=stbi_load(fileName,&srcImage.width,&srcImage.height,&srcImage.bpp,0);
     if (!srcImage.data){
         printf("Error loading file %s.\n",fileName);
@@ -143,29 +143,28 @@ int main(int argc,char** argv){
     pthread_t thread_handles[thread_count];
     Data data[thread_count];
     int rows_num = srcImage.height / thread_count;
-    
+
     for (int thread = 0; thread < thread_count; thread++) {
-	data[thread].srcImage = &srcImage;
-	data[thread].destImage = &destImage;
-	memcpy(data[thread].algorithm, algorithms[type], sizeof(Matrix));
-	data[thread].start = thread * rows_num;
-	data[thread].stop = (thread + 1) * rows_num;
+        data[thread].srcImage = &srcImage;
+        data[thread].destImage = &destImage;
+        memcpy(data[thread].algorithm, algorithms[type], sizeof(Matrix));
+        data[thread].start = thread * rows_num;
+        data[thread].stop = (thread + 1) * rows_num;
     }
     for (int thread = 0; thread < thread_count; thread++) {
-    	pthread_create(&thread_handles[thread], NULL, threadProc, &data[thread]);
+        pthread_create(&thread_handles[thread], NULL, threadProc, &data[thread]);
     }
     for (int thread=0; thread < thread_count; thread++) {
-    	pthread_join(thread_handles[thread], NULL);
+        pthread_join(thread_handles[thread], NULL);
     }
 
     //convolute(&srcImage,&destImage,algorithms[type]);
     stbi_write_png("output.png",destImage.width,destImage.height,destImage.bpp,destImage.data,destImage.bpp*destImage.width);
     stbi_image_free(srcImage.data);
-    
+
     free(destImage.data);
     pthread_mutex_destroy(&mutex);
     t2=time(NULL);
     printf("Took %ld seconds\n",t2-t1);
    return 0;
 }
-
